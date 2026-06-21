@@ -1,0 +1,19 @@
+# Python
+elevate/
+venv/
+__pycache__/
+*.pyc
+uploads/
+*.db
+
+# Node
+node_modules/
+.next/
+out/
+
+# Env & secrets
+.env
+
+# OS
+.DS_Store
+Thumbs.db
