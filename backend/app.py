@@ -3,7 +3,6 @@ from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
 from pydantic import BaseModel
 from docx import Document
@@ -46,7 +45,18 @@ def init_db():
         FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE)""")
 
 init_db()
-embedding_model = SentenceTransformer(os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"))
+def get_embeddings(texts, is_query=False):
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "xxxxx":
+        if isinstance(texts, list):
+            return [[0.0] * 768 for _ in texts]
+        return [0.0] * 768
+    task_type = "retrieval_query" if is_query else "retrieval_document"
+    res = genai.embed_content(
+        model="models/gemini-embedding-001",
+        content=texts,
+        task_type=task_type
+    )
+    return res["embedding"]
 
 RISK_KEYWORDS = {
     "HIGH": [r"non[- ]compete", r"non[- ]solicit", r"indemnify", r"indemnity", r"hold harmless",
@@ -100,7 +110,7 @@ def gemini_json(prompt, fallback):
     if not GEMINI_API_KEY or GEMINI_API_KEY == "xxxxx":
         return fallback
     try:
-        r = genai.GenerativeModel("gemini-1.5-flash").generate_content(
+        r = genai.GenerativeModel("gemini-2.5-flash").generate_content(
             prompt, generation_config={"response_mime_type": "application/json"})
         return json.loads(r.text)
     except Exception as e:
@@ -119,7 +129,7 @@ def answer_rag(query, chunks):
         return "Configure GEMINI_API_KEY for chat."
     ctx = "\n\n".join(f"--- Page {c['page']} ---\n{c['text']}" for c in chunks)
     try:
-        return genai.GenerativeModel("gemini-1.5-flash").generate_content(
+        return genai.GenerativeModel("gemini-2.5-flash").generate_content(
             f"Answer using ONLY this contract context:\n{ctx}\n\nQuestion: {query}\nCite page numbers.").text
     except Exception as e:
         return f"Gemini error: {e}"
@@ -129,7 +139,8 @@ def faiss_paths(cid):
 
 def build_faiss(cid, chunks):
     idx, jp = faiss_paths(cid)
-    emb = np.array(embedding_model.encode([c["text"] for c in chunks])).astype("float32")
+    texts = [c["text"] for c in chunks]
+    emb = np.array(get_embeddings(texts)).astype("float32")
     index = faiss.IndexFlatL2(emb.shape[1])
     index.add(emb)
     faiss.write_index(index, idx)
@@ -143,7 +154,7 @@ def search_faiss(cid, query, k=3):
     index = faiss.read_index(idx)
     with open(jp, encoding="utf-8") as f:
         chunks = json.load(f)
-    qv = np.array(embedding_model.encode([query])).astype("float32")
+    qv = np.array([get_embeddings(query, is_query=True)]).astype("float32")
     _, indices = index.search(qv, k)
     return [chunks[i] for i in indices[0] if 0 <= i < len(chunks)]
 
@@ -153,6 +164,10 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 class ChatRequest(BaseModel):
     contract_id: int
     question: str
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):

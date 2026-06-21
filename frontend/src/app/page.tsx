@@ -33,10 +33,27 @@ export default function Home() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const chatEnd = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { fetch(`${API}/contracts`).then(r => r.ok && r.json()).then(d => d && setContracts(d)); }, []);
+  const checkBackend = async () => {
+    try {
+      const res = await fetch(`${API}/health`, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) throw new Error("offline");
+      setBackendOnline(true);
+      const list = await fetch(`${API}/contracts`).then(r => r.ok ? r.json() : []);
+      setContracts(list);
+    } catch {
+      setBackendOnline(false);
+    }
+  };
+
+  useEffect(() => {
+    checkBackend();
+    const id = setInterval(checkBackend, 10000);
+    return () => clearInterval(id);
+  }, []);
   useEffect(() => { if (selectedId) loadReport(selectedId); }, [selectedId]);
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, chatLoading]);
 
@@ -113,7 +130,15 @@ export default function Home() {
         </div>
       </aside>
 
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden">
+        {backendOnline === false && (
+          <div className="bg-red-950/60 border-b border-red-800 px-4 py-2 text-xs text-red-200 shrink-0">
+            Backend offline — start it first:{" "}
+            <code className="bg-black/30 px-1 rounded">uvicorn backend.app:app --reload --port 8001</code>
+            {" "}(from project root, with venv activated)
+          </div>
+        )}
+        <div className="flex-1 flex overflow-hidden">
         {loading ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3">
             <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
@@ -199,6 +224,7 @@ export default function Home() {
             </div>
           </div>
         )}
+        </div>
       </main>
     </div>
   );
